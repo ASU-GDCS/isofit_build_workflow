@@ -59,7 +59,7 @@ def apply_oe(args):
             to-sun zenith, phase, slope, aspect, cosine i, UTC time) [expected ENVI format]
         working_directory (str): directory to stage multiple outputs, will contain subdirectories
         sensor (str): the sensor used for acquisition, will be used to set noise and datetime settings.  choices are:
-            [ang, avcl, neon, prism]
+            [gao, ang, avcl, neon, prism, custom]
         copy_input_files (Optional, int): flag to choose to copy input_radiance, input_loc, and input_obs locally into
             the working_directory.  0 for no, 1 for yes.  Default 0
         modtran_path (Optional, str): Location of MODTRAN utility, alternately set with MODTRAN_DIR environment variable
@@ -114,6 +114,7 @@ def apply_oe(args):
     use_superpixels = (args.empirical_line == 1) or (args.analytical_line == 1)
 
     if args.sensor not in [
+        "gao",
         "ang",
         "avcl",
         "neon",
@@ -122,11 +123,12 @@ def apply_oe(args):
         "hyp",
         "prisma",
         "av3",
+        "custom"
     ]:
         if args.sensor[:3] != "NA-":
             raise ValueError(
                 'argument sensor: invalid choice: "NA-test" (choose from '
-                '"ang", "avcl", "neon", "prism", "emit", "av3", "NA-*")'
+                '"gao", "ang", "avcl", "neon", "prism", "emit", "av3", "NA-*", "custom")'
             )
 
     if args.num_neighbors is not None and len(args.num_neighbors) > 1:
@@ -188,7 +190,9 @@ def apply_oe(args):
 
     # Based on the sensor type, get appropriate year/month/day info fro intial condition.
     # We'll adjust for line length and UTC day overrun later
-    if args.sensor == "ang":
+    if args.sensor == "gao":
+        dt = datetime.strptime(paths.fid[3:-5], "%Y%m%dt%H%M%S")
+    elif args.sensor == "ang":
         # parse flightline ID (AVIRIS-NG assumptions)
         dt = datetime.strptime(paths.fid[3:], "%Y%m%dt%H%M%S")
     elif args.sensor == "av3":
@@ -210,6 +214,8 @@ def apply_oe(args):
         dt = datetime.strptime(args.sensor[3:], "%Y%m%d")
     elif args.sensor == "hyp":
         dt = datetime.strptime(paths.fid[10:17], "%Y%j")
+    elif args.sensor == "custom":
+        dt = datetime.strptime(args.dt, "%Y%m%d:%H%M%S")
     else:
         raise ValueError(
             "Datetime object could not be obtained. Please check file name of input"
@@ -568,7 +574,10 @@ class Pathnames:
 
     def __init__(self, args):
         # Determine FID based on sensor name
-        if args.sensor == "ang":
+        if args.sensor == "gao":
+            self.fid = split(args.input_radiance)[-1][:23]
+            logging.info("Flightline ID: %s" % self.fid)
+        elif args.sensor == "ang":
             self.fid = split(args.input_radiance)[-1][:18]
             logging.info("Flightline ID: %s" % self.fid)
         elif args.sensor == "prism":
@@ -591,6 +600,11 @@ class Pathnames:
             self.fid = os.path.splitext(os.path.basename(args.input_radiance))[0]
         elif args.sensor == "hyp":
             self.fid = split(args.input_radiance)[-1][:22]
+        elif args.sensor == "custom":
+            self.fid = args.fid
+
+        if args.fid and args.sensor != "custom":
+            logging.warn("Ignoring fid argument because instrument is not 'custom'")
 
         # Names from inputs
         self.aerosol_climatology = args.aerosol_climatology_path
@@ -1962,6 +1976,8 @@ def write_modtran_template(
 @click.option("--multiple_restarts", is_flag=True, default=False)
 @click.option("--logging_level", default="INFO")
 @click.option("--log_file")
+@click.option("--fid",help="Flightline ID for 'custom' instrument setting")
+@click.option("--dt",help="Datetime string for 'custom' instrument in format '%Y%m%d:%H%M%S'")
 @click.option("--n_cores", type=int, default=1)
 @click.option("--presolve", type=int, default=0)
 @click.option("--empirical_line", type=int, default=0)
