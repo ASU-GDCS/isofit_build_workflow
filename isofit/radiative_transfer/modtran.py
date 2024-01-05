@@ -47,6 +47,26 @@ tropopause_altitude_km = 17.0
 
 ### Classes ###
 
+def compare_json(json1, json2, path=""):
+    differences = []
+    if isinstance(json1, dict) and isinstance(json2, dict):
+        all_keys = set(json1.keys()).union(set(json2.keys()))
+        for key in all_keys:
+            differences.extend(compare_json(json1.get(key, None),
+                                            json2.get(key, None),
+                                            path + '.' + key if path else key))
+    elif isinstance(json1, list) and isinstance(json2, list):
+        max_ind = max(len(json1), len(json2))
+        for ind in range(max_ind):
+            v1 = json1[ind] if ind < len(json1) else None
+            v2 = json2[ind] if ind < len(json2) else None
+            differences.extend(compare_json(v1, v2, path + '.' + f"{ind:03d}" if path else f"{ind:03d}"))
+    elif json1 != json2:
+        ##If we get there then there is a fundamental structure difference
+        differences.append((path + '.', json1, json2))
+        logging.info(f"Found difference {json1} vs {json2}")
+    return differences
+
 
 class ModtranRT(TabularRT):
     """A model of photon transport including the atmosphere."""
@@ -226,6 +246,10 @@ class ModtranRT(TabularRT):
             thermal_upwellings, thermal_downwellings = [], []
             lines = f.readlines()
             nheader = 5
+
+            #  blanks = np.where([l=="\n" for l in lines])[0]
+            #  assert len(blanks) == 3
+            #  nwl = blanks[1] - nheader
 
             # Mark header and data segments
             nwl = len(self.wl)
@@ -794,19 +818,31 @@ class ModtranRT(TabularRT):
         infilepath = os.path.join(self.lut_dir, "LUT_" + fn + ".json")
 
         if not self.required_results_exist(fn):
+            logging.info(f"Failed required_results_exist for fn {fn}")
             rebuild = True
         else:
             # We compare the two configuration files, ignoring names and
             # wavelength paths which tend to be non-portable
+            #  logging.info(f"Passed required_results_exist for fn {fn}, cross-checking configs")
             with open(infilepath, "r") as fin:
                 current_config = json.load(fin)["MODTRAN"]
-                current_config[0]["MODTRANINPUT"]["NAME"] = ""
-                modtran_config[0]["MODTRANINPUT"]["NAME"] = ""
-                current_config[0]["MODTRANINPUT"]["SPECTRAL"]["FILTNM"] = ""
-                modtran_config[0]["MODTRANINPUT"]["SPECTRAL"]["FILTNM"] = ""
+                for c in current_config:
+                    c["MODTRANINPUT"]["NAME"] = ""
+                    c["MODTRANINPUT"]["SPECTRAL"]["FILTNM"] = ""
+                for c in modtran_config:
+                    c["MODTRANINPUT"]["NAME"] = ""
+                    c["MODTRANINPUT"]["SPECTRAL"]["FILTNM"] = ""
                 current_str = json.dumps(current_config)
                 modtran_str = json.dumps(modtran_config)
-                rebuild = modtran_str.strip() != current_str.strip()
+                diffs = compare_json(current_config, modtran_config)
+                #  rebuild = modtran_str.strip() != current_str.strip()
+                rebuild = len(diffs) > 0
+                if rebuild:
+                    logging.info(f"Rebuild needed for {fn}, {len(diffs)} modtran config differences:")
+                    for v in diffs:
+                        logging.info(f"{v[0]}:")
+                        logging.info(f"LUT: {v[1]}")
+                        logging.info(f"CUR: {v[2]}")
 
         if not rebuild:
             raise FileExistsError("File exists")
